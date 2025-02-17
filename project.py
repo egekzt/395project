@@ -7,7 +7,7 @@ Created on Fri Feb  7 21:39:20 2025
 
 import pyomo.environ as pyomo
 import pandas as pd
-from pyomo.environ import Param,Var,NonNegativeIntegers,Constraint,Set
+from pyomo.environ import Param,Var,NonNegativeIntegers,Constraint,Set,Objective, minimize
 
 model = pyomo.ConcreteModel()
 
@@ -79,12 +79,14 @@ model.vehicle_count =Param(model.VEHICLE_TYPES,initiaize={})
 model.operations = Var(model.VEHICLE_TYPES,model.DAYS,domain=NonNegativeIntegers) 
 #the amount of vehicle assigned for the specific day, type and size 
 model.vehicle_assigned = Var(model.DAYS,model.VEHICLE_TYPES,model.PALLET_SIZES)
+#the amount of vehicle rented
+model.vehicle_rented = Var(model.DAYS, model.VEHICLE_TYPES, model.PALLET_SIZES, domain=NonNegativeIntegers)
 
 #filling the necessary variables from the table vehicle_data
 for index,row in vehicle_data.iterrows():
     vehicle_type = vehicle_type_mapping[row['Vehicle']]
     model.vehicle_cost[vehicle_type] = row['Fixed cost']
-    model.vehicles_cost_rented[vehicle_type] = row['Variable cost']
+    model.vehicle_cost_rented[vehicle_type] = row['Variable cost']
 
 for index, row in vehicle_data.iterrows():
     amount = row['Num. of vehicles ']
@@ -128,7 +130,7 @@ def operation_lateness_rule(model,o,p):
     return sum(model.shipped_product[p,s,d] for s in model.PALLET_SIZES for d in range(1,model.due_date[o,p]+1)) >= sum(model.ordered_product[o,p,d] for d in range(1,model.due_date[o,p]+1))
 model.lateness = Constraint(model.ORDER_PRODUCT_PAIRS, rule=operation_lateness_rule)  
 
-
+#our two constraints for corresponding size, for the assigned vehicle counts we make sure we can carry enough
 def operation_shipment_rule_one(model,d):
      shipped_size_one = sum(model.shipped_product[p,1,d] for p in model.PRODUCTS)
      available_capacity_to_transport_size_one = sum(model.vehicle_assigned[d,t,1]*model.vehicle_capacity[t,1] for t in model.VEHICLE_TYPES)
@@ -144,11 +146,17 @@ model.operation_daily_shipment_constraint_size_two = Constraint(model.DAYS,rule=
 #since im using a formula which i pick the amount of vehicle assigned to keep track for each day, based on type we can just assigned-owned to get the rented value
 #on the obj function both variables needs to be multiplied by the corresponding values to their own so we have to keep them sepearate
 def rented_vehicle_rule(model, d, v, p):
-    return model.vehicle_rented[d, v, p] >= model.vehicle_assigned[d, v, p] - model.owned_vehicles[v]
+    return model.vehicle_rented[d, v, p] >= model.vehicle_assigned[d, v, p] - model.vehicle_count[v]
 
 model.rented_vehicle_constraint = Constraint(model.DAYS, model.VEHICLE_TYPES, model.PALLET_SIZES, rule=rented_vehicle_rule)
 
-    
+def objective_function(model):
+    rental_car_cost = sum(model.vehicle_cost_rented[t] * model.vehicle_rented[d,t,s] for t in model.VEHICLE_TYPES for d in model.DAYS for s in model.PALLET_SIZES)
+    owned_car_cost = sum((model.vehicle_assigned[d,t,s] - model.vehicle_rented[d,t,s])*model.vehicle_cost[t] for t in model.VEHICLE_TYPES for d in model.DAYS for s in model.PALLET_SIZES)
+    #to calculate earliness penalty we have to ask, how do we decide which penalty we pick, the closest to our deadline ? or the one with lowest cost
+    return owned_car_cost + rental_car_cost
+
+model.obj = Objective(rule=objective_function, sense=minimize) 
     
     
    

@@ -67,7 +67,7 @@ model.VEHICLE_TYPES = Set(initialize = [1,2,3])
 #where 1 corresponds to 100x120 and 2 is 80x120 same as vehicle types we can hardcode since wont be more sizes
 model.PALLET_SIZES = Set(initialize = [1,2]) 
 #to decide the amount of product type and size shipped each day
-model.shipped_product = Var(model.PRODUCTS,model.PALLET_SIZE,model.DAYS,domain=NonNegativeIntegers) 
+model.shipped_product = Var(model.PRODUCTS,model.PALLET_SIZES,model.DAYS,domain=NonNegativeIntegers) 
 #as named its for getting the capacity for given vehicle type with given size
 model.capacity = Param(model.VEHICLE_TYPES, model.PALLET_SIZES,initialize=vehicle_capacity) 
 #tracking cost of vehicles seperately

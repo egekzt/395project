@@ -22,7 +22,7 @@ vehicle_type_mapping={
     'Lorry' : 2,
     'Van' : 3
 }
-
+Q = 15
 #to be able to directly access vehicle capacities
 vehicle_capacity ={
         (1,1): 22,
@@ -78,7 +78,7 @@ model.vehicle_count =Param(model.VEHICLE_TYPES,initiaize={})
 #to hold operation count for each vehicle and day 
 model.operations = Var(model.VEHICLE_TYPES,model.DAYS,domain=NonNegativeIntegers) 
 #the amount of vehicle assigned for the specific day, type and size 
-model.vehicle_assigned = Var(model.DAYS,model.VEHICLE_TYPES,PALLET_SIZES)
+model.vehicle_assigned = Var(model.DAYS,model.VEHICLE_TYPES,model.PALLET_SIZES)
 
 #filling the necessary variables from the table vehicle_data
 for index,row in vehicle_data.iterrows():
@@ -132,7 +132,7 @@ model.lateness = Constraint(model.ORDER_PRODUCT_PAIRS,model.DAYS, rule=operation
 
 #since im using a formula which i pick the amount of vehicle assigned to keep track for each day, based on type we can just assigned-owned to get the rented value
 #on the obj function both variables needs to be multiplied by the corresponding values to their own so we have to keep them sepearate
- def rented_vehicle_rule(model, d, v, p):
+def rented_vehicle_rule(model, d, v, p):
     return model.vehicle_rented[d, v, p] >= model.vehicle_assigned[d, v, p] - model.owned_vehicles[v]
 
 model.rented_vehicle_constraint = Constraint(model.DAYS, model.VEHICLE_TYPES, model.PALLET_SIZES, rule=rented_vehicle_rule)

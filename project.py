@@ -126,9 +126,20 @@ model.waiting_area = Constraint(model.PRODUCTS,rule=waiting_area_limit_rule)
 #to make sure no order is completed after the date
 def operation_lateness_rule(model,o,p):
     return sum(model.shipped_product[p,s,d] for s in model.PALLET_SIZES for d in range(1,model.due_date[o,p]+1)) >= sum(model.ordered_product[o,p,d] for d in range(1,model.due_date[o,p]+1))
-model.lateness = Constraint(model.ORDER_PRODUCT_PAIRS,model.DAYS, rule=operation_lateness_rule)  
+model.lateness = Constraint(model.ORDER_PRODUCT_PAIRS, rule=operation_lateness_rule)  
 
-      
+
+def operation_shipment_rule_one(model,d):
+     shipped_size_one = sum(model.shipped_product[p,1,d] for p in model.PRODUCTS)
+     available_capacity_to_transport_size_one = sum(model.vehicle_assigned[d,t,1]*model.vehicle_capacity[t,1] for t in model.VEHICLE_TYPES)
+     return shipped_size_one <= available_capacity_to_transport_size_one
+model.operation_daily_shipment_constraint_size_one = Constraint(model.DAYS,rule=operation_shipment_rule_one)
+
+def operation_shipment_rule_two(model,d):
+     shipped_size_two = sum(model.shipped_product[p,2,d] for p in model.PRODUCTS)
+     available_capacity_to_transport_size_two = sum(model.vehicle_assigned[d,t,2]*model.vehicle_capacity[t,2] for t in model.VEHICLE_TYPES)
+     return  shipped_size_two <= available_capacity_to_transport_size_two
+model.operation_daily_shipment_constraint_size_two = Constraint(model.DAYS,rule=operation_shipment_rule_two)
 
 #since im using a formula which i pick the amount of vehicle assigned to keep track for each day, based on type we can just assigned-owned to get the rented value
 #on the obj function both variables needs to be multiplied by the corresponding values to their own so we have to keep them sepearate

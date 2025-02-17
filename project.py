@@ -33,17 +33,45 @@ vehicle_capacity ={
 
 model.released_product = Var(model.PRODUCTS,model.PALLET_SIZES, model.DAYS, domain=NonNegativeIntegers)  #to be able to update available product we need to be able to tell how much releases when
 model.available_product = Var(model.PRODUCTS,model.PALLET_SIZES, model.DAYS, domain=NonNegativeIntegers) #for available product to make decisions to send & to make sure at the end of the day
-                                                                                            #we dont exceed the Q value
+               
+model.ORDER_PRODUCT_PAIRS = Set(initialize={(row['Order ID'], row['Product Type']) 
+                                            for _, row in order_data.iterrows()})
+
+# to be able to compare the demand with shipped amount to make sure we dont underdeliver
+model.ordered_product = Param(model.ORDER_PRODUCT_PAIRS, model.DAYS, 
+                              initialize={(row['Order ID'], row['Product Type'], row['Due date']): row['Demand Amount'] 
+                                          for _, row in order_data.iterrows()}, 
+                              default=0)
+
+# to keep the due dates to be able to make the necessary comparation
+model.due_date = Param(model.ORDER_PRODUCT_PAIRS, 
+                       initialize={(row['Order ID'], row['Product Type']): row['Due date'] 
+                                   for _, row in order_data.iterrows()})
+
+# for the amount that is unnecessary but delivered we have to pay earliness penalty
+model.earliness_penalty = Param(model.ORDER_PRODUCT_PAIRS, 
+                                initialize={(row['Order ID'], row['Product Type']): row['Earliness penalty'] 
+                                            for _, row in order_data.iterrows()}, default=0)
+
+                                                                             
 model.vehicle_count = Var(model.VEHICLE_TYPES,domain=NonNegativeIntegers)
-model.DAYS = Set(initialize=range(1,7)) #given on homework text we are on a range of atmost 7 so i initialize the range as 1-7 but could be read from csv aswell
-model.PRODUCTS = Set(initialize=pallet_data['Product'].unique()) #need to be decided based on the type of datasets i will be given both days and products
-model.VEHICLE_TYPES = Set(initialize = [1,2,3]) #only 3 types of vehicles are declared so we can hardcode
-model.PALLET_SIZES = Set(initialize = [1,2]) #where 1 corresponds to 100x120 and 2 is 80x120 same as vehicle types we can hardcode since wont be more sizes
-model.shipped_product = Var(model.PRODUCTS,model.PALLET_SIZE,model.DAYS,domain=NonNegativeIntegers) #to decide the amount of product type and size shipped each day
-model.capacity = Param(model.VEHICLE_TYPES, model.PALLET_SIZES,initialize=vehicle_capacity) #as named its for getting the capacity for given vehicle type with given size
+#given on homework text we are on a range of atmost 7 so i initialize the range as 1-7 but could be read from csv aswell
+model.DAYS = Set(initialize=range(1,8)) 
+#need to be decided based on the type of datasets i will be given both days and products
+model.PRODUCTS = Set(initialize=pallet_data['Product'].unique()) 
+#only 3 types of vehicles are declared so we can hardcode
+model.VEHICLE_TYPES = Set(initialize = [1,2,3]) 
+#where 1 corresponds to 100x120 and 2 is 80x120 same as vehicle types we can hardcode since wont be more sizes
+model.PALLET_SIZES = Set(initialize = [1,2]) 
+#to decide the amount of product type and size shipped each day
+model.shipped_product = Var(model.PRODUCTS,model.PALLET_SIZE,model.DAYS,domain=NonNegativeIntegers) 
+#as named its for getting the capacity for given vehicle type with given size
+model.capacity = Param(model.VEHICLE_TYPES, model.PALLET_SIZES,initialize=vehicle_capacity) 
 model.vehicle_cost = Param(model.VEHICLE_TYPES,initialize={})
 model.vehicle_cost_rented =Param(model.VEHICLE_TYPES,initialize={})
+model.vehicle_count =Param
 model.operations = Var(model.VEHICLE_TYPES,model.DAYS,domain=NonNegativeIntegers) #to hold operation count for each vehicle and day 
+model.vehicle_assigned = Var(model.DAYS,model.VEHICLE_TYPES,PALLET_SIZES)#the amount of vehicle assigned for the specific day, type and size 
 
 
 for index,row in vehicle_data.iterrows():
@@ -82,4 +110,20 @@ model.operation_limit = Constraint(model.VEHICLE_TYPES,model.DAYS,rule=operation
 def waiting_area_limit_rule(model,d): #to make sure amount of pallets left available does not exceed Q
     return sum(model.available_product[i,d] for i in model.PRODUCTS) <= Q #q will be given
 model.waiting_area = Constraint(model.PRODUCTS,rule=waiting_area_limit_rule)
+
+def operation_lateness_rule(model,o,p):#to make sure no order is completed after the date
+    return sum(model.shipped_product[p,s,d] for s in model.PALLET_SIZES for d in range(1,model.due_date[o,p]+1)) >= sum(model.ordered_product[o,p,d] for d in range(1,model.due_date[o,p]+1))
+model.lateness = Constraint(model.ORDER_PRODUCT_PAIRS,model.DAYS, rule=operation_lateness_rule)  
+
+def operation_vehicle_decision_rule(model):
+    return        
+
+ def rented_vehicle_rule(model, d, v, p):
+    return model.vehicle_rented[d, v, p] >= model.vehicle_assigned[d, v, p] - model.owned_vehicles[v]
+
+model.rented_vehicle_constraint = Constraint(model.DAYS, model.VEHICLE_TYPES, model.PALLET_SIZES, rule=rented_vehicle_rule)
+
+    
+    
+    
    

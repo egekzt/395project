@@ -57,8 +57,9 @@ model.earliness_penalty = Param(model.ORDER_PRODUCT_PAIRS,
                                 initialize={(row['Order ID'], row['Product Type']): row['Earliness penalty'] 
                                             for _, row in order_data.iterrows()}, default=0)
 
+
                                                                              
-model.vehicle_count = Var(model.VEHICLE_TYPES,domain=NonNegativeIntegers)
+
 #given on homework text we are on a range of atmost 7 so i initialize the range as 1-7 but could be read from csv aswell
 model.DAYS = Set(initialize=range(1,8)) 
 #need to be decided based on the type of datasets i will be given both days and products

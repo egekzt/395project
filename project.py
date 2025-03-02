@@ -4,13 +4,14 @@ Created on Fri Feb  7 21:39:20 2025
 
 @author: egeki
 """
-
+import time
 import pyomo.environ as pyomo
 import pandas as pd
-from pyomo.environ import Param,Var,NonNegativeIntegers,Constraint,Set,Objective, minimize
+from pyomo.environ import *
 
 model = pyomo.ConcreteModel()
-
+solver = SolverFactory('gurobi')
+results = solver.solve(model,tee=True)
 #file names needs to be implemented after datasets are given out
 pallet_data = pd.read_csv() 
 vehicle_data = pd.read_csv()
@@ -157,6 +158,21 @@ def objective_function(model):
     return owned_car_cost + rental_car_cost
 
 model.obj = Objective(rule=objective_function, sense=minimize) 
+objective_value = model.objective_function.expr()
     
     
-   
+#calculating the cpu time
+start_time = time.time()
+solver.solve(model)
+end_time = time.time()
+cpu_time = end_time - start_time
+
+gap = solver.results.problem.upper_bound - solver.results.problem.lower_bound
+if solver.results.problem.upper_bound != 0:
+    gap_percentage = (gap / solver.results.problem.upper_bound) * 100
+else:
+    gap_percentage = 0  #error handle we dont wanna divide by 0 and throw exceptions
+
+print("Objective Function Value:", objective_value)
+print("CPU Time:", cpu_time, "seconds")
+print("Gap Percentage:", gap_percentage if gap_percentage is not None else "N/A")

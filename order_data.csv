@@ -1,0 +1,10 @@
+Order ID,Product Type,Demand Amount,Due date,Earliness penalty
+1,P2,200,2,5
+2,P2,150,2,5
+3,P3,290,3,3
+4,P1,155,3,3
+5,P2,300,3,4
+6,P3,260,3,4
+7,P1,250,2,6
+8,P2,150,2,6
+9,P3,190,1,4

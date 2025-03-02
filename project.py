@@ -13,9 +13,9 @@ model = pyomo.ConcreteModel()
 solver = SolverFactory('gurobi')
 results = solver.solve(model,tee=True)
 #file names needs to be implemented after datasets are given out
-pallet_data = pd.read_csv() 
-vehicle_data = pd.read_csv()
-order_data = pd.read_csv()
+pallet_data = pd.read_csv("pallet_data.csv") 
+vehicle_data = pd.read_csv("vehicle_data.csv")
+order_data = pd.read_csv("order_data.csv")
 
 #mapper for vehicles
 vehicle_type_mapping={ 

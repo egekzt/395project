@@ -5,17 +5,20 @@ Created on Fri Feb  7 21:39:20 2025
 @author: egeki
 """
 import time
-import pyomo.environ as pyomo
+
 import pandas as pd
 from pyomo.environ import *
 
-model = pyomo.ConcreteModel()
-solver = SolverFactory('gurobi')
+model = ConcreteModel()
+solver = SolverFactory('cplex')
 results = solver.solve(model,tee=True)
 #file names needs to be implemented after datasets are given out
 pallet_data = pd.read_csv("pallet_data.csv") 
 vehicle_data = pd.read_csv("vehicle_data.csv")
 order_data = pd.read_csv("order_data.csv")
+
+
+
 
 #mapper for vehicles
 vehicle_type_mapping={ 
@@ -33,8 +36,33 @@ vehicle_capacity ={
         (3,1): 6,
         (3,2) : 8,
 }
+
+#given on homework text we are on a range of atmost 7 so i initialize the range as 1-7 but could be read from csv aswell
+model.DAYS = Set(initialize=range(1,8)) 
+#need to be decided based on the type of datasets i will be given both days and products
+model.PRODUCTS = Set(initialize=pallet_data['Product Type'].unique()) 
+#only 3 types of vehicles are declared so we can hardcode
+model.VEHICLE_TYPES = Set(initialize = [1,2,3]) 
+#where 1 corresponds to 100x120 and 2 is 80x120 same as vehicle types we can hardcode since wont be more sizes
+model.PALLET_SIZES = Set(initialize = [1,2]) 
+#to decide the amount of product type and size shipped each day
+model.shipped_product = Var(model.PRODUCTS,model.PALLET_SIZES,model.DAYS,domain=NonNegativeIntegers,initialize =0) 
+#as named its for getting the capacity for given vehicle type with given size
+model.capacity = Param(model.VEHICLE_TYPES, model.PALLET_SIZES,initialize=vehicle_capacity) 
+#tracking cost of vehicles seperately
+model.vehicle_cost = Param(model.VEHICLE_TYPES, mutable=True, initialize={})
+model.vehicle_cost_rented =Param(model.VEHICLE_TYPES,mutable =True,initialize={})
+#count of owned vehicles for our company so we can decide after what point they count as rental
+model.vehicle_count =Param(model.VEHICLE_TYPES,mutable=True,initialize={})
+#to hold operation count for each vehicle and day 
+model.operations = Var(model.VEHICLE_TYPES,model.DAYS,domain=NonNegativeIntegers) 
+#the amount of vehicle assigned for the specific day, type and size 
+model.vehicle_assigned = Var(model.DAYS,model.VEHICLE_TYPES,model.PALLET_SIZES,initialize =0)
+#the amount of vehicle rented
+model.vehicle_rented = Var(model.DAYS, model.VEHICLE_TYPES, model.PALLET_SIZES, domain=NonNegativeIntegers,initialize =0)
 #to be able to update available product we need to be able to tell how much releases when
-model.released_product = Var(model.PRODUCTS,model.PALLET_SIZES, model.DAYS, domain=NonNegativeIntegers)  
+model.released_product = Var(model.PRODUCTS,model.PALLET_SIZES, model.DAYS, domain=NonNegativeIntegers, initialize=0)  
+
 #for available product to make decisions to send & to make sure at the end of the day
 model.available_product = Var(model.PRODUCTS,model.PALLET_SIZES, model.DAYS, domain=NonNegativeIntegers) 
                
@@ -60,29 +88,6 @@ model.earliness_penalty = Param(model.ORDER_PRODUCT_PAIRS,
 
                                                                              
 
-#given on homework text we are on a range of atmost 7 so i initialize the range as 1-7 but could be read from csv aswell
-model.DAYS = Set(initialize=range(1,8)) 
-#need to be decided based on the type of datasets i will be given both days and products
-model.PRODUCTS = Set(initialize=pallet_data['Product'].unique()) 
-#only 3 types of vehicles are declared so we can hardcode
-model.VEHICLE_TYPES = Set(initialize = [1,2,3]) 
-#where 1 corresponds to 100x120 and 2 is 80x120 same as vehicle types we can hardcode since wont be more sizes
-model.PALLET_SIZES = Set(initialize = [1,2]) 
-#to decide the amount of product type and size shipped each day
-model.shipped_product = Var(model.PRODUCTS,model.PALLET_SIZES,model.DAYS,domain=NonNegativeIntegers) 
-#as named its for getting the capacity for given vehicle type with given size
-model.capacity = Param(model.VEHICLE_TYPES, model.PALLET_SIZES,initialize=vehicle_capacity) 
-#tracking cost of vehicles seperately
-model.vehicle_cost = Param(model.VEHICLE_TYPES,initialize={})
-model.vehicle_cost_rented =Param(model.VEHICLE_TYPES,initialize={})
-#count of owned vehicles for our company so we can decide after what point they count as rental
-model.vehicle_count =Param(model.VEHICLE_TYPES,initiaize={})
-#to hold operation count for each vehicle and day 
-model.operations = Var(model.VEHICLE_TYPES,model.DAYS,domain=NonNegativeIntegers) 
-#the amount of vehicle assigned for the specific day, type and size 
-model.vehicle_assigned = Var(model.DAYS,model.VEHICLE_TYPES,model.PALLET_SIZES)
-#the amount of vehicle rented
-model.vehicle_rented = Var(model.DAYS, model.VEHICLE_TYPES, model.PALLET_SIZES, domain=NonNegativeIntegers)
 
 #filling the necessary variables from the table vehicle_data
 for index,row in vehicle_data.iterrows():
@@ -91,7 +96,8 @@ for index,row in vehicle_data.iterrows():
     model.vehicle_cost_rented[vehicle_type] = row['Variable cost']
 
 for index, row in vehicle_data.iterrows():
-    amount = row['Num. of vehicles ']
+    
+    amount = row['Num of vehicles']
     vehicle_type_temp = row['Vehicle']
     vehicle_type = vehicle_type_mapping.get(vehicle_type_temp,None) #since ive used values for vehicle types but table has names i should be using a mapper to reach ints
     
@@ -102,7 +108,7 @@ for index, row in vehicle_data.iterrows():
 
 #grabbing the data from pallet_data table
 for index, row in pallet_data.iterrows(): #here from the table we calculate released product count for each day for every size and product type
-    product = row['Product']
+    product = row['Product Type']
     release_day = row['Release day']
     amount = row['Product amount']
     size_type = row['Size type']
@@ -124,8 +130,8 @@ model.operation_limit = Constraint(model.VEHICLE_TYPES,model.DAYS,rule=operation
 
 #to make sure amount of pallets left available does not exceed Q
 def waiting_area_limit_rule(model,d): 
-    return sum(model.available_product[i,d] for i in model.PRODUCTS) <= Q #q will be given
-model.waiting_area = Constraint(model.PRODUCTS,rule=waiting_area_limit_rule)
+    return sum(model.available_product[i,s,d] for i in model.PRODUCTS for s in model.PALLET_SIZES) <= Q #q will be given
+model.waiting_area = Constraint(model.DAYS,rule=waiting_area_limit_rule)
 
 #to make sure no order is completed after the date
 def operation_lateness_rule(model,o,p):
@@ -135,13 +141,13 @@ model.lateness = Constraint(model.ORDER_PRODUCT_PAIRS, rule=operation_lateness_r
 #our two constraints for corresponding size, for the assigned vehicle counts we make sure we can carry enough
 def operation_shipment_rule_one(model,d):
      shipped_size_one = sum(model.shipped_product[p,1,d] for p in model.PRODUCTS)
-     available_capacity_to_transport_size_one = sum(model.vehicle_assigned[d,t,1]*model.vehicle_capacity[t,1] for t in model.VEHICLE_TYPES)
+     available_capacity_to_transport_size_one = sum(model.vehicle_assigned[d,t,1]*model.capacity[t,1] for t in model.VEHICLE_TYPES)
      return shipped_size_one <= available_capacity_to_transport_size_one
 model.operation_daily_shipment_constraint_size_one = Constraint(model.DAYS,rule=operation_shipment_rule_one)
 
 def operation_shipment_rule_two(model,d):
      shipped_size_two = sum(model.shipped_product[p,2,d] for p in model.PRODUCTS)
-     available_capacity_to_transport_size_two = sum(model.vehicle_assigned[d,t,2]*model.vehicle_capacity[t,2] for t in model.VEHICLE_TYPES)
+     available_capacity_to_transport_size_two = sum(model.vehicle_assigned[d,t,2]*model.capacity[t,2] for t in model.VEHICLE_TYPES)
      return  shipped_size_two <= available_capacity_to_transport_size_two
 model.operation_daily_shipment_constraint_size_two = Constraint(model.DAYS,rule=operation_shipment_rule_two)
 
@@ -159,21 +165,24 @@ def objective_function(model):
     return owned_car_cost + rental_car_cost
 
 model.obj = Objective(rule=objective_function, sense=minimize) 
-objective_value = model.objective_function.expr()
+
+
     
     
-#calculating the cpu time
+# Calculating the CPU time
 start_time = time.time()
-solver.solve(model)
+results = solver.solve(model, tee=True)
 end_time = time.time()
 cpu_time = end_time - start_time
 
-gap = solver.results.problem.upper_bound - solver.results.problem.lower_bound
-if solver.results.problem.upper_bound != 0:
-    gap_percentage = (gap / solver.results.problem.upper_bound) * 100
+# Check the solver status and gap
+if results.Solver.status == SolverStatus.ok and results.Solver.termination_condition == TerminationCondition.optimal:
+    gap = results.Solver.gap  # This should give you the gap if available
+    gap_percentage = gap * 100 if gap is not None else 0
 else:
-    gap_percentage = 0  #error handle we dont wanna divide by 0 and throw exceptions
+    gap_percentage = "N/A"  # In case of an error or no gap available
 
-print("Objective Function Value:", objective_value)
+# Print the results
+print("Objective Function Value:", model.obj())
 print("CPU Time:", cpu_time, "seconds")
-print("Gap Percentage:", gap_percentage if gap_percentage is not None else "N/A")
+print("Gap Percentage:", gap_percentage)

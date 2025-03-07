@@ -63,7 +63,7 @@ model.vehicle_assigned = Var(model.DAYS,model.VEHICLE_TYPES,model.PALLET_SIZES,i
 #the amount of vehicle rented
 model.vehicle_rented = Var(model.DAYS, model.VEHICLE_TYPES, model.PALLET_SIZES, domain=NonNegativeIntegers,initialize =0)
 #to be able to update available product we need to be able to tell how much releases when
-model.released_product = Var(model.PRODUCTS,model.PALLET_SIZES, model.DAYS, domain=NonNegativeIntegers,initialize = 0)  
+model.released_product = Param(model.PRODUCTS,model.PALLET_SIZES, model.DAYS, domain=NonNegativeIntegers,mutable=True)  
 
 #for available product to make decisions to send & to make sure at the end of the day
 model.available_product = Var(model.PRODUCTS,model.PALLET_SIZES, model.DAYS, domain=NonNegativeIntegers) 
@@ -117,17 +117,26 @@ for index, row in pallet_data.iterrows(): #here from the table we calculate rele
     release_day = row['Release Day']
     amount = row['Amount']
     size_type = row['Pallet Size']
+    if model.released_product[product,size_type,release_day] == None:
+        model.released_product[product,size_type,release_day]=0
     model.released_product[product,size_type,release_day] += amount
+    
+
 
 #to be able to keep track of the available_product each day we sum the released and then extract the shipped amount from that, this gives us the available amount
 #which we need to be able to tell how much we have that we can able to ship + the Q constraint where for each day we have to make sure avaiable_product doesnt exceeds Q
-for product in model.PRODUCTS:
-    for size_type in model.PALLET_SIZES:
-        for day in model.DAYS:
-            model.available_product[product, size_type, day] = (
-                sum(model.released_product[product, size_type, d] for d in range(1, day+1)) 
-                - sum(model.shipped_product[product, size_type, d] for d in range(1, day+1))
-)
+def available_product_rule(model, product, size_type, day):
+    if day == 1:
+        return model.available_product[product, size_type, day] == model.released_product[product, size_type, day] - model.shipped_product[product, size_type, day]
+    else:
+        return model.available_product[product, size_type, day] == (
+            model.available_product[product, size_type, day-1]
+            + model.released_product[product, size_type, day]
+            - model.shipped_product[product, size_type, day]
+        )
+
+model.AvailableProductConstraint = Constraint(model.PRODUCTS, model.PALLET_SIZES, model.DAYS, rule=available_product_rule)
+
 #to make sure we dont exceed the limit for 3 operations for each vehicle on a day
 def operation_limit_rule(model,k,d): 
     return model.operations[k,d] <= 3*model.vehicle_count[k]

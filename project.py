@@ -9,15 +9,16 @@ import time
 import pandas as pd
 from pyomo.environ import *
 
+
 model = ConcreteModel()
 solver = SolverFactory('cplex')
 solver.options['timelimit'] = 36000
-solver.options['mipgap'] = 0.01  # 1% optimality gap
+solver.options['mipgap'] = 0.0
 
 #file names needs to be implemented after datasets are given out
-pallet_data = pd.read_excel("ProjectPart1-Scenario1.xlsx",sheet_name = "Pallets" ) 
-vehicle_data = pd.read_excel("ProjectPart1-Scenario1.xlsx",sheet_name= "Vehicles")  
-order_data = pd.read_excel("ProjectPart1-Scenario1.xlsx",sheet_name = "Orders")
+pallet_data = pd.read_excel("ProjectPart1-Scenario3.xlsx",sheet_name = "Pallets" ) 
+vehicle_data = pd.read_excel("ProjectPart1-Scenario3.xlsx",sheet_name= "Vehicles")  
+order_data = pd.read_excel("ProjectPart1-Scenario3.xlsx",sheet_name = "Orders")
 
 
 
@@ -47,8 +48,6 @@ model.PRODUCTS = Set(initialize=pallet_data['Product Type'].unique())
 model.VEHICLE_TYPES = Set(initialize = [1,2,3]) 
 #where 1 corresponds to 100x120 and 2 is 80x120 same as vehicle types we can hardcode since wont be more sizes
 model.PALLET_SIZES = Set(initialize = [1,2]) 
-#to decide the amount of product type and size shipped each day
-model.shipped_product = Var(model.PRODUCTS,model.PALLET_SIZES,model.DAYS,domain=NonNegativeIntegers,initialize =0) 
 #as named its for getting the capacity for given vehicle type with given size
 model.capacity = Param(model.VEHICLE_TYPES, model.PALLET_SIZES,initialize=vehicle_capacity) 
 #tracking cost of vehicles seperately
@@ -57,41 +56,48 @@ model.vehicle_cost_rented =Param(model.VEHICLE_TYPES,mutable =True,initialize={}
 #count of owned vehicles for our company so we can decide after what point they count as rental
 model.vehicle_count =Param(model.VEHICLE_TYPES,mutable=True,initialize={})
 #to hold operation count for each vehicle and day 
-model.operations = Var(model.VEHICLE_TYPES,model.DAYS,domain=NonNegativeIntegers) 
-#the amount of vehicle assigned for the specific day, type and size 
-model.vehicle_assigned = Var(model.DAYS,model.VEHICLE_TYPES,model.PALLET_SIZES,initialize =0,domain=NonNegativeIntegers)
-#the amount of vehicle rented
-model.vehicle_rented = Var(model.DAYS, model.VEHICLE_TYPES, model.PALLET_SIZES, domain=NonNegativeIntegers,initialize =0)
-#to be able to update available product we need to be able to tell how much releases when
-model.released_product = Param(model.PRODUCTS,model.PALLET_SIZES, model.DAYS, domain=NonNegativeIntegers,mutable=True)  
 
-#for available product to make decisions to send & to make sure at the end of the day
-model.available_product = Var(model.PRODUCTS,model.PALLET_SIZES, model.DAYS, domain=NonNegativeIntegers) 
-               
-model.ORDER_PRODUCT_PAIRS = Set(initialize={(row['Order ID'], row['Product Type']) 
-                                            for _, row in order_data.iterrows()})
+
+#to be able to update available product we need to be able to tell how much releases when
+model.released_product = Param(model.PRODUCTS,model.PALLET_SIZES, model.DAYS, domain=NonNegativeIntegers,default = 0,mutable=True)  
+
+
+
+
+
+# Initialize the set with standard Python integers
+model.ORDERS = Set(initialize=order_data['Order ID'].unique()) 
+
+
 
 # to be able to compare the demand with shipped amount to make sure we dont underdeliver
-model.ordered_product = Param(model.ORDER_PRODUCT_PAIRS, model.DAYS, 
-                              initialize={(row['Order ID'], row['Product Type'], row['Due Date']): row['Demand Amount'] 
+model.ordered_product = Param(model.ORDERS,model.PRODUCTS,  
+                              initialize={(row['Order ID'], row['Product Type']): row['Demand Amount'] 
                                           for _, row in order_data.iterrows()}, 
                               default=0)
 
 # to keep the due dates to be able to make the necessary comparation
-model.due_date = Param(model.ORDER_PRODUCT_PAIRS, 
+model.due_date = Param(model.ORDERS,model.PRODUCTS,
                        initialize={(row['Order ID'], row['Product Type']): row['Due Date'] 
-                                   for _, row in order_data.iterrows()})
+                                   for _, row in order_data.iterrows()},default =0)
 
 # for the amount that is unnecessary but delivered we have to pay earliness penalty
-model.earliness_penalty = Param(model.ORDER_PRODUCT_PAIRS, 
+model.earliness_penalty = Param(model.ORDERS,model.PRODUCTS, 
                                 initialize={(row['Order ID'], row['Product Type']): row['Earliness Penalty'] 
                                             for _, row in order_data.iterrows()}, default=0)
 
-model.excess_product = Var(model.PRODUCTS, model.DAYS, within=NonNegativeIntegers,initialize =0)
 
 
+model.owned_operations=Var(model.DAYS,model.PALLET_SIZES,model.VEHICLE_TYPES,domain=NonNegativeIntegers)
+model.rented_operations=Var(model.DAYS,model.PALLET_SIZES,model.VEHICLE_TYPES,domain=NonNegativeIntegers)
+model.operations = Var(model.DAYS,model.PALLET_SIZES,model.VEHICLE_TYPES,domain=NonNegativeIntegers,initialize=0) 
+#the amount of vehicle assigned for the specific day, type and size 
+model.vehicle_assigned = Var(model.DAYS,model.VEHICLE_TYPES,initialize =0,domain=NonNegativeIntegers)
+#the amount of vehicle rented
+model.vehicle_rented = Var(model.DAYS, model.VEHICLE_TYPES,domain=NonNegativeIntegers,initialize =0)
+model.shipped_for_order=Var(model.ORDERS,model.PRODUCTS,model.DAYS,model.PALLET_SIZES,initialize=0,domain=NonNegativeIntegers)
 
-                                                                             
+
 
 
 #filling the necessary variables from the table vehicle_data
@@ -117,103 +123,78 @@ for index, row in pallet_data.iterrows(): #here from the table we calculate rele
     release_day = row['Release Day']
     amount = row['Amount']
     size_type = row['Pallet Size']
-    if model.released_product[product,size_type,release_day] == None:
-        model.released_product[product,size_type,release_day]=0
     model.released_product[product,size_type,release_day] += amount
+    
+  
+
+
+
+def shipment_limit_rule(model, p, d):
+    # Check if sum of shipped products for a product `p` until day `d` does not exceed released products
+   return sum(model.shipped_for_order[o, p, day,1] for day in range(1,d+1)for o in model.ORDERS) <= sum(model.released_product[p, 1,day] for day in range(1,d+1))
+
+model.ShipmentLimit = Constraint(model.PRODUCTS, model.DAYS, rule=shipment_limit_rule)
+
+
+def shipment_limit_rule2(model, p, d):
+    return sum(model.shipped_for_order[o, p, day,2] for day in range(1,d+1)for o in model.ORDERS) <= sum(model.released_product[p, 2,day] for day in range(1,d+1))
+
+model.ShipmentLimit2 = Constraint(model.PRODUCTS, model.DAYS, rule=shipment_limit_rule2)
+
+
+def demand_satisfaction_rule(model, o, p):
+    if model.ordered_product[o, p] > 0:  # Only apply the constraint for non-zero demand
+        return sum(model.shipped_for_order[o, p, d, s] 
+                   for d in range(1, model.due_date[o, p] + 1) 
+                   for s in model.PALLET_SIZES) == model.ordered_product[o, p]
+    else:
+        return Constraint.Feasible  # Skip if no demand exists
+
+model.DemandSatisfaction = Constraint(model.ORDERS, model.PRODUCTS, rule=demand_satisfaction_rule)
+
+
+
+
+def storage_constraint_rule(model,d):
+    return sum(model.released_product[p,s,day]for p in model.PRODUCTS for s in model.PALLET_SIZES for day in range(1,d+1)) - sum(model.shipped_for_order[o,p,day,s] for o in model.ORDERS for p in model.PRODUCTS for day in range(1,d+1) for s in model.PALLET_SIZES )<=Q
+model.StorageConstraint=Constraint(model.DAYS,rule=storage_constraint_rule)
+
+
     
 
 
-#to be able to keep track of the available_product each day we sum the released and then extract the shipped amount from that, this gives us the available amount
-#which we need to be able to tell how much we have that we can able to ship + the Q constraint where for each day we have to make sure avaiable_product doesnt exceeds Q
-def available_product_rule(model, product, size_type, day):
-    if day == 1:
-        return model.available_product[product, size_type, day] == model.released_product[product, size_type, day] - model.shipped_product[product, size_type, day]
-    else:
-        return model.available_product[product, size_type, day] == (
-            model.available_product[product, size_type, day-1]
-            + model.released_product[product, size_type, day]
-            - model.shipped_product[product, size_type, day]
-        )
+def operation_shipment_rule(model,d,s):
+    return sum((model.shipped_for_order[o,p,d,s]) for p in model.PRODUCTS for o in model.ORDERS) <= sum(model.operations[d,s,t] * model.capacity[t,s] for t in model.VEHICLE_TYPES)
+model.operation_daily_shipment_constraint_size_one = Constraint(model.DAYS,model.PALLET_SIZES,rule=operation_shipment_rule)
+''' 
+def operation_vehicle_assign_rule(model,d,t):
+    return model.vehicle_assigned[d,t] >= (sum(model.operations[d,s,t] for s in model.PALLET_SIZES)/3)
+model.operation_vehicle_assignment = Constraint(model.DAYS,model.VEHICLE_TYPES,rule=operation_vehicle_assign_rule)
+'''
+def operations_rule(model, d, s, t):
+    return model.operations[d, s, t] == model.owned_operations[d, s, t] + model.rented_operations[d, s, t]
+model.OperationsLink = Constraint(model.DAYS, model.PALLET_SIZES, model.VEHICLE_TYPES, rule=operations_rule)
 
-model.AvailableProductConstraint = Constraint(model.PRODUCTS, model.PALLET_SIZES, model.DAYS, rule=available_product_rule)
-
-#to make sure we dont exceed the limit for 3 operations for each vehicle on a day
-def operation_limit_rule(model,k,d): 
-    return model.operations[k,d] <= 3*model.vehicle_count[k]
-model.operation_limit = Constraint(model.VEHICLE_TYPES,model.DAYS,rule=operation_limit_rule)
-
-#to make sure amount of pallets left available does not exceed Q
-def waiting_area_limit_rule(model,d): 
-    return sum(model.available_product[i,s,d] for i in model.PRODUCTS for s in model.PALLET_SIZES) <= Q #q will be given
-model.waiting_area = Constraint(model.DAYS,rule=waiting_area_limit_rule)
-
-#to make sure no order is completed after the date
-def operation_lateness_rule(model,o,p):
-    return sum(model.shipped_product[p,s,d] for s in model.PALLET_SIZES for d in range(1,model.due_date[o,p]+1)) >= sum(model.ordered_product[o,p,d] for d in range(1,model.due_date[o,p]+1))
-model.lateness = Constraint(model.ORDER_PRODUCT_PAIRS, rule=operation_lateness_rule)  
-
-#our two constraints for corresponding size, for the assigned vehicle counts we make sure we can carry enough
-def operation_shipment_rule_one(model,d):
-     shipped_size_one = sum(model.shipped_product[p,1,d] for p in model.PRODUCTS)
-     available_capacity_to_transport_size_one = sum(model.vehicle_assigned[d,t,1]*model.capacity[t,1] for t in model.VEHICLE_TYPES)
-     return shipped_size_one <= available_capacity_to_transport_size_one
-model.operation_daily_shipment_constraint_size_one = Constraint(model.DAYS,rule=operation_shipment_rule_one)
-
-def operation_shipment_rule_two(model,d):
-     shipped_size_two = sum(model.shipped_product[p,2,d] for p in model.PRODUCTS)
-     available_capacity_to_transport_size_two = sum(model.vehicle_assigned[d,t,2]*model.capacity[t,2] for t in model.VEHICLE_TYPES)
-     return  shipped_size_two <= available_capacity_to_transport_size_two
-model.operation_daily_shipment_constraint_size_two = Constraint(model.DAYS,rule=operation_shipment_rule_two)
-
-                      
-#since im using a formula which i pick the amount of vehicle assigned to keep track for each day, based on type we can just assigned-owned to get the rented value
-#on the obj function both variables needs to be multiplied by the corresponding values to their own so we have to keep them sepearate
-def rented_vehicle_rule(model, d, v, p):
-    return model.vehicle_rented[d, v, p] >= model.vehicle_assigned[d, v, p] - model.vehicle_count[v]
-
-model.rented_vehicle_constraint = Constraint(model.DAYS, model.VEHICLE_TYPES, model.PALLET_SIZES, rule=rented_vehicle_rule)
-
-def excess_inventory_rule(model, p, d):
-    if d == min(model.DAYS):  # First day condition
-        return model.excess_product[p, d] == sum(
-            model.shipped_product[p, s, d] for s in model.PALLET_SIZES
-        ) - sum(
-            model.ordered_product[o, p, d] for (o, product) in model.ORDER_PRODUCT_PAIRS if p == product
-        )
-    else:  # For all other days
-        return model.excess_product[p, d] == sum(
-            model.shipped_product[p, s, d] for s in model.PALLET_SIZES
-        ) - sum(
-            model.ordered_product[o, p, d] for (o, product) in model.ORDER_PRODUCT_PAIRS if p == product
-        )
-
-model.excess_constraint = Constraint(model.PRODUCTS, model.DAYS, rule=excess_inventory_rule)
-
-
+def owned_trips_limit(model, d, t):
+    return sum(model.owned_operations[d, s, t] for s in model.PALLET_SIZES) <= 3 * model.vehicle_count[t]
+model.OwnedTripsLimit = Constraint(model.DAYS, model.VEHICLE_TYPES, rule=owned_trips_limit)
 
 
 
 
 def objective_function(model):
-    # Rental car cost
-    rental_car_cost = sum(model.vehicle_cost_rented[t] * model.vehicle_rented[d,t,s] 
-                          for t in model.VEHICLE_TYPES for d in model.DAYS for s in model.PALLET_SIZES)
-    
-    # Owned car cost
-    owned_car_cost = sum((model.vehicle_assigned[d,t,s] - model.vehicle_rented[d,t,s]) * model.vehicle_cost[t] 
-                         for t in model.VEHICLE_TYPES for d in model.DAYS for s in model.PALLET_SIZES)
-    
-    # Earliness penalty
-    earliness_penalty = sum(
-        model.excess_product[product, day] * model.earliness_penalty[o, product]
-        for (o, product) in model.ORDER_PRODUCT_PAIRS
-        for day in model.DAYS
-    )
-    
-    # Total objective: sum of owned car cost, rental car cost, and earliness penalty
-    return owned_car_cost + rental_car_cost + earliness_penalty
+    owned_cost = sum(model.owned_operations[d, s, t] * model.vehicle_cost[t] 
+                 for d in model.DAYS for s in model.PALLET_SIZES for t in model.VEHICLE_TYPES)
+    rented_cost = sum(model.rented_operations[d, s, t] * model.vehicle_cost_rented[t] 
+                  for d in model.DAYS for s in model.PALLET_SIZES for t in model.VEHICLE_TYPES)
+    earliness_penalty = sum(model.earliness_penalty[o, p] * (model.due_date[o, p] - d) * model.shipped_for_order[o, p, d, s] 
+                        for o in model.ORDERS for p in model.PRODUCTS 
+                        for d in model.DAYS if d <= model.due_date[o, p] 
+                        for s in model.PALLET_SIZES)
+    return owned_cost + rented_cost + earliness_penalty
+model.obj = Objective(rule=objective_function, sense=minimize)
 
-model.obj = Objective(rule=objective_function, sense=minimize) 
+
 
 
     
@@ -226,16 +207,14 @@ cpu_time = end_time - start_time
 
 
 
-# Print the results
-print("Objective Function Value:", model.obj())
-print("CPU Time:", cpu_time, "seconds")
-
-
-
+'''
 # Example: Assuming 'model' is your Pyomo model
 for v in model.component_objects(Var, active=True):
     print(f"\nVariable: {v.name}")
     print("Index\tValue")
     for index in v:
         print(f"{index}\t{v[index].value}")
-
+'''  
+# Print the results
+print("Objective Function Value:", model.obj())
+print("CPU Time:", cpu_time, "seconds")
